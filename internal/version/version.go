@@ -1,6 +1,7 @@
 package version
 
 import (
+	"os"
 	"runtime/debug"
 	"strings"
 )
@@ -46,6 +47,9 @@ func GetWazeroVersion() (ret string) {
 	// Salt the version so compilation caches from the unpatched runtime are
 	// never shared with this fork (SSA differs for shared-memory modules).
 	ret += "-re2fixedmem1"
+	if os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1" {
+		ret += "-nb"
+	}
 	version = ret
 	return ret
 }

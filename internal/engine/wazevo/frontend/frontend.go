@@ -2,6 +2,8 @@
 package frontend
 
 import (
+	"os"
+
 	"bytes"
 	"math"
 	"sync"
@@ -106,6 +108,10 @@ type (
 var knownSafeBoundsAtTheEndOfBlockNil = wazevoapi.NewNilVarLength[knownSafeBoundWithID]()
 
 // NewFrontendCompiler returns a frontend Compiler.
+func unsafeSkipBoundsChecksEnabled() bool {
+	return os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1"
+}
+
 func NewFrontendCompiler(m *wasm.Module, ssaBuilder ssa.Builder, offset *wazevoapi.ModuleContextOffsetData, ensureTermination bool, listenerOn bool, sourceInfo bool) *Compiler {
 	c := &Compiler{
 		m:                                 m,

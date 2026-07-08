@@ -4283,6 +4283,24 @@ func (c *Compiler) memOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBy
 		}
 	}
 
+	// Guard-page bounds elision: a 32-bit wasm address plus a small constant
+	// offset cannot escape a reservation of max-memory + 64KiB. The allocator
+	// must reserve that much address space (PROT_NONE beyond committed pages)
+	// so any out-of-bounds access faults instead of corrupting host memory —
+	// the same technique wasmtime and V8 use. Large constant offsets fall
+	// back to the explicit check.
+	if unsafeSkipBoundsChecksEnabled() && ceil <= 65536 {
+		extBaseAddr := builder.AllocateInstruction().
+			AsUExtend(baseAddr, 32, 64).
+			Insert(builder).
+			Return()
+		memBase := c.getMemoryBaseValue(false)
+		address = builder.AllocateInstruction().
+			AsIadd(memBase, extBaseAddr).Insert(builder).Return()
+		c.recordKnownSafeBound(baseAddrID, ceil, address)
+		return
+	}
+
 	ceilConst := builder.AllocateInstruction()
 	ceilConst.AsIconst64(ceil)
 	builder.InsertInstruction(ceilConst)
