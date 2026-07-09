@@ -27,6 +27,20 @@ var boundsCacheSalt = func() string {
 	return ""
 }()
 
+// A version injected via `-ldflags -X ...internal/version.version=...` (the
+// wazero CLI build) is already non-empty at process start, so GetWazeroVersion
+// returns it via the len(version)!=0 fast path and never reaches the salt
+// append sites below. Salt it once here so an unchecked (no-bounds) run of an
+// ldflag-built binary can't share a compilation cache with a checked run of the
+// same binary. Package-level variable initializers (boundsCacheSalt) run before
+// init, so the salt is available; GetWazeroVersion's own paths already include
+// it, so there is no double application.
+func init() {
+	if version != "" {
+		version += boundsCacheSalt
+	}
+}
+
 // GetWazeroVersion returns the current version of wazero either in the go.mod or set by ldflag for wazero CLI.
 //
 // If this is not CLI, this assumes that downstream users of wazero imports wazero as "github.com/tetratelabs/wazero".
