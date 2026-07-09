@@ -4281,7 +4281,16 @@ func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, o
 	if known := c.getKnownSafeBound(baseAddrID); known.valid() {
 		// We reuse the calculated absolute address even if the bound is not known to be safe.
 		address = known.absoluteAddr
-		if ceil <= known.bound {
+		// The recorded bound is safe to skip an explicit check for only when it
+		// was proven by an emitted memory-length check OR the current op can
+		// itself rely on the guard page. When guard-page elision is enabled a
+		// bound may have been seeded by a prior elided (guard-only) access that
+		// emitted no check — and that access can even be removed by DCE. Such a
+		// bound must NOT let the atomic wait/notify path (allowGuardPageElision
+		// == false) skip its check, since its Go trampoline truncates the
+		// address and never touches the guard page. When the flag is off, no
+		// guard-only bounds exist, so reuse stays unconditional as before.
+		if ceil <= known.bound && (allowGuardPageElision || !unsafeSkipBoundsChecksEnabled()) {
 			if !address.Valid() {
 				// This means that, the bound is known to be safe, but the memory base might have changed.
 				// So, we re-calculate the address.
