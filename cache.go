@@ -55,7 +55,7 @@ func NewCompilationCache() CompilationCache {
 // Note: The embedder must safeguard this directory from external changes.
 func NewCompilationCacheWithDir(dirname string) (CompilationCache, error) {
 	c := &cache{}
-	err := c.ensuresFileCache(dirname, version.GetWazeroVersion())
+	err := c.ensuresFileCache(dirname, version.GetCompilationCacheVersion())
 	return c, err
 }
 
