@@ -4258,6 +4258,21 @@ func (c *Compiler) lowerTailCallReturnCallRef(typeIndex uint32) {
 
 // memOpSetup inserts the bounds check and calculates the address of the memory operation (loads/stores).
 func (c *Compiler) memOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBytes uint64) (address ssa.Value) {
+	// Non-atomic loads/stores perform a native memory access, so an
+	// out-of-bounds address is caught by the reserved guard region (see
+	// memOpSetupWithGuardElision). They may therefore use the guard-page
+	// elision fast path.
+	return c.memOpSetupWithGuardElision(baseAddr, constOffset, operationSizeInBytes, true)
+}
+
+// memOpSetupWithGuardElision is memOpSetup with explicit control over the
+// guard-page bounds-check elision. atomicMemOpSetup passes false because
+// memory.atomic.wait*/notify hand the computed absolute address to a Go
+// trampoline that truncates it back to a uint32 offset (uint32(addr-base))
+// instead of performing a native access: an out-of-bounds 32-bit address never
+// reaches the guard region and would instead wrap to a valid in-bounds offset,
+// so those ops must keep the explicit bounds check.
+func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, operationSizeInBytes uint64, allowGuardPageElision bool) (address ssa.Value) {
 	address = ssa.ValueInvalid
 	builder := c.ssaBuilder
 
@@ -4283,13 +4298,20 @@ func (c *Compiler) memOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBy
 		}
 	}
 
-	// Guard-page bounds elision: a 32-bit wasm address plus a small constant
-	// offset cannot escape a reservation of max-memory + 64KiB. The allocator
-	// must reserve that much address space (PROT_NONE beyond committed pages)
-	// so any out-of-bounds access faults instead of corrupting host memory —
-	// the same technique wasmtime and V8 use. Large constant offsets fall
-	// back to the explicit check.
-	if unsafeSkipBoundsChecksEnabled() && ceil <= 65536 {
+	// Guard-page bounds elision: the explicit bounds check may be skipped only
+	// when the host allocator reserves the full 4 GiB 32-bit wasm address space
+	// plus a 64 KiB guard tail (memBase .. memBase+4GiB+64KiB) with everything
+	// past committed memory left PROT_NONE — the same technique wasmtime and V8
+	// use. The dynamic 32-bit address (any value in [0, 2^32-1]) is then covered
+	// by the 4 GiB reservation, and the `ceil <= 65536` test keeps the *constant*
+	// offset+size within the 64 KiB guard, so any out-of-bounds access lands in
+	// the PROT_NONE region and faults (SIGSEGV) instead of corrupting host
+	// memory. A smaller reservation (e.g. max-memory + 64 KiB) is NOT sufficient:
+	// an address in (max-memory, 4 GiB) would escape the reservation without
+	// faulting. This is an unsafe, opt-in fast path — the paired allocator MUST
+	// honor the full reservation. Large constant offsets fall back to the
+	// explicit check.
+	if allowGuardPageElision && unsafeSkipBoundsChecksEnabled() && ceil <= 65536 {
 		extBaseAddr := builder.AllocateInstruction().
 			AsUExtend(baseAddr, 32, 64).
 			Insert(builder).
@@ -4344,7 +4366,11 @@ func (c *Compiler) memOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBy
 func (c *Compiler) atomicMemOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBytes uint64) (address ssa.Value) {
 	builder := c.ssaBuilder
 
-	addrWithoutOffset := c.memOpSetup(baseAddr, constOffset, operationSizeInBytes)
+	// Atomic ops opt out of guard-page elision: memory.atomic.wait*/notify pass
+	// the address through a Go trampoline that truncates it to a uint32 offset,
+	// so an out-of-bounds address would wrap instead of faulting in the guard
+	// region. Keep the explicit bounds check for the whole atomic path.
+	addrWithoutOffset := c.memOpSetupWithGuardElision(baseAddr, constOffset, operationSizeInBytes, false)
 	var addr ssa.Value
 	if constOffset == 0 {
 		addr = addrWithoutOffset

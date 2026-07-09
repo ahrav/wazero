@@ -2,10 +2,9 @@
 package frontend
 
 import (
-	"os"
-
 	"bytes"
 	"math"
+	"os"
 	"sync"
 
 	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
@@ -107,11 +106,19 @@ type (
 
 var knownSafeBoundsAtTheEndOfBlockNil = wazevoapi.NewNilVarLength[knownSafeBoundWithID]()
 
-// NewFrontendCompiler returns a frontend Compiler.
+// unsafeSkipBounds is captured once at process start so that every memOpSetup
+// call within a process observes a consistent value. Reading the environment
+// on each call would be both wasteful (memOpSetup runs hundreds of times per
+// module) and unsafe: a mid-compilation change could elide bounds checks in
+// some functions but not others, and could diverge from the cache-key salt in
+// internal/version, which is also captured once at start.
+var unsafeSkipBounds = os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1"
+
 func unsafeSkipBoundsChecksEnabled() bool {
-	return os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1"
+	return unsafeSkipBounds
 }
 
+// NewFrontendCompiler returns a frontend Compiler.
 func NewFrontendCompiler(m *wasm.Module, ssaBuilder ssa.Builder, offset *wazevoapi.ModuleContextOffsetData, ensureTermination bool, listenerOn bool, sourceInfo bool) *Compiler {
 	c := &Compiler{
 		m:                                 m,
