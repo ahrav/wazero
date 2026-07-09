@@ -136,7 +136,7 @@ func NewEngine(ctx context.Context, _ api.CoreFeatures, fc filecache.Cache) wasm
 		machine:         machine,
 		be:              be,
 		fileCache:       fc,
-		wazeroVersion:   version.GetWazeroVersion(),
+		wazeroVersion:   version.GetCompilationCacheVersion(),
 	}
 	e.compileSharedFunctions()
 	return e

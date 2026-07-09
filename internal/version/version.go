@@ -17,9 +17,14 @@ var version string
 // produced without it, so unchecked machine code is never loaded by a checked
 // build (or vice versa). It is captured once at process start — the same point
 // the frontend captures the flag — so the two cannot diverge if the
-// environment changes between engine creation and module compilation. It must
-// be applied on every code path that produces a version string, including the
-// dev/replace fallback below.
+// environment changes between engine creation and module compilation.
+//
+// It is deliberately applied only in GetCompilationCacheVersion (the cache
+// key), NOT in GetWazeroVersion, so that the CLI's exact `== Default`
+// dev-mode checks and the `version` subcommand output are unaffected. Applying
+// it at the cache boundary also isolates every build type uniformly — release,
+// dev/replace, and `-ldflags -X ...version.version=...` — without special
+// casing any GetWazeroVersion return path.
 var boundsCacheSalt = func() string {
 	if os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1" {
 		return "-nb"
@@ -27,18 +32,15 @@ var boundsCacheSalt = func() string {
 	return ""
 }()
 
-// A version injected via `-ldflags -X ...internal/version.version=...` (the
-// wazero CLI build) is already non-empty at process start, so GetWazeroVersion
-// returns it via the len(version)!=0 fast path and never reaches the salt
-// append sites below. Salt it once here so an unchecked (no-bounds) run of an
-// ldflag-built binary can't share a compilation cache with a checked run of the
-// same binary. Package-level variable initializers (boundsCacheSalt) run before
-// init, so the salt is available; GetWazeroVersion's own paths already include
-// it, so there is no double application.
-func init() {
-	if version != "" {
-		version += boundsCacheSalt
-	}
+// GetCompilationCacheVersion returns the version string used to key the wazevo
+// compilation cache (both the on-disk cache directory and the serialized cache
+// header). It augments GetWazeroVersion with boundsCacheSalt so that machine
+// code compiled with WAZERO_UNSAFE_SKIP_BOUNDS=1 is never loaded from — or
+// written to — a cache belonging to a build without it, and vice versa. Keep
+// this and GetWazeroVersion in sync at every cache site so the directory key
+// and the header check never disagree.
+func GetCompilationCacheVersion() string {
+	return GetWazeroVersion() + boundsCacheSalt
 }
 
 // GetWazeroVersion returns the current version of wazero either in the go.mod or set by ldflag for wazero CLI.
@@ -69,17 +71,13 @@ func GetWazeroVersion() (ret string) {
 		}
 	}
 	if versionMissing(ret) {
-		// Even in dev/replace builds where no module version is available,
-		// salt the cache version so unchecked (no-bounds) machine code is
-		// never shared with a checked build.
-		version = Default + boundsCacheSalt // don't return parens
-		return version
+		return Default // don't return parens
 	}
 
 	// Cache for the subsequent calls.
 	// Salt the version so compilation caches from the unpatched runtime are
 	// never shared with this fork (SSA differs for shared-memory modules).
-	ret += "-re2fixedmem1" + boundsCacheSalt
+	ret += "-re2fixedmem1"
 	version = ret
 	return ret
 }
