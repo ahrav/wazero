@@ -7,6 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/engine/wazevo/wazevoapi"
 	"github.com/tetratelabs/wazero/internal/platform"
 	"github.com/tetratelabs/wazero/internal/testing/require"
@@ -14,6 +15,17 @@ import (
 )
 
 var ctx = context.Background()
+
+type engineGuardedAllocator struct {
+	addressSpace uint64
+	guardSize    uint64
+}
+
+func (*engineGuardedAllocator) Allocate(uint64, uint64) experimental.LinearMemory { return nil }
+
+func (a *engineGuardedAllocator) UnsafeBoundsCheckElisionReservation() (uint64, uint64) {
+	return a.addressSpace, a.guardSize
+}
 
 func TestMain(m *testing.M) {
 	if !platform.CompilerSupported() {
@@ -25,6 +37,34 @@ func TestMain(m *testing.M) {
 func TestNewEngine(t *testing.T) {
 	e := NewEngine(ctx, api.CoreFeaturesV1, nil)
 	require.NotNil(t, e)
+}
+
+func TestNewEngine_boundsCheckElisionAllocator(t *testing.T) {
+	t.Setenv("WAZERO_UNSAFE_SKIP_BOUNDS", "1")
+	checked := NewEngine(context.Background(), api.CoreFeaturesV1, nil).(*engine)
+	require.False(t, checked.boundsElision)
+	require.NoError(t, checked.ValidateMemoryAllocator(nil))
+
+	allocator := &engineGuardedAllocator{
+		addressSpace: experimental.UnsafeBoundsCheckElisionAddressSpace,
+		guardSize:    experimental.UnsafeBoundsCheckElisionGuardSize,
+	}
+	unsafeCtx := experimental.WithMemoryAllocator(context.Background(), allocator)
+	unchecked := NewEngine(unsafeCtx, api.CoreFeaturesV1, nil).(*engine)
+	require.True(t, unchecked.boundsElision)
+	require.Equal(t, allocator, unchecked.memoryAllocator)
+	require.NoError(t, unchecked.ValidateMemoryAllocator(allocator))
+	require.EqualError(t, unchecked.ValidateMemoryAllocator(nil), "memory allocator does not match the runtime bounds-check-elision allocator")
+
+	other := *allocator
+	require.EqualError(t, unchecked.ValidateMemoryAllocator(&other), "memory allocator does not match the runtime bounds-check-elision allocator")
+
+	invalid := &engineGuardedAllocator{
+		addressSpace: experimental.UnsafeBoundsCheckElisionAddressSpace,
+		guardSize:    experimental.UnsafeBoundsCheckElisionGuardSize - 1,
+	}
+	invalidCtx := experimental.WithMemoryAllocator(context.Background(), invalid)
+	require.False(t, NewEngine(invalidCtx, api.CoreFeaturesV1, nil).(*engine).boundsElision)
 }
 
 func TestEngine_CompiledModuleCount(t *testing.T) {

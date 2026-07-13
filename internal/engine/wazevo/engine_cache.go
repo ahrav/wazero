@@ -26,7 +26,7 @@ var crc = crc32.MakeTable(crc32.Castagnoli)
 // fileCacheKey returns a key for the file cache.
 // In order to avoid collisions with the existing compiler, we do not use m.ID directly,
 // but instead we rehash it with magic.
-func fileCacheKey(m *wasm.Module) (ret filecache.Key) {
+func fileCacheKey(m *wasm.Module, boundsElision bool) (ret filecache.Key) {
 	s := sha256.New()
 	s.Write(m.ID[:])
 	s.Write(magic)
@@ -36,6 +36,11 @@ func fileCacheKey(m *wasm.Module) (ret filecache.Key) {
 	// Reuse the `ret` buffer to write the first 8 bytes of the CPU features so that we can avoid the allocation.
 	binary.LittleEndian.PutUint64(ret[:8], cpu)
 	s.Write(ret[:8])
+	if boundsElision {
+		s.Write([]byte{1})
+	} else {
+		s.Write([]byte{0})
+	}
 	// Finally, write the hash to the ret buffer.
 	s.Sum(ret[:0])
 	return
@@ -116,7 +121,7 @@ func (e *engine) addCompiledModuleToCache(module *wasm.Module, cm *compiledModul
 	if e.fileCache == nil || module.IsHostModule {
 		return
 	}
-	err = e.fileCache.Add(fileCacheKey(module), serializeCompiledModule(e.wazeroVersion, cm))
+	err = e.fileCache.Add(fileCacheKey(module, e.boundsElision), serializeCompiledModule(e.wazeroVersion, cm))
 	return
 }
 
@@ -127,7 +132,7 @@ func (e *engine) getCompiledModuleFromCache(module *wasm.Module) (cm *compiledMo
 
 	// Check if the entries exist in the external cache.
 	var cached io.ReadCloser
-	cached, hit, err = e.fileCache.Get(fileCacheKey(module))
+	cached, hit, err = e.fileCache.Get(fileCacheKey(module, e.boundsElision))
 	if !hit || err != nil {
 		return
 	}
@@ -141,7 +146,7 @@ func (e *engine) getCompiledModuleFromCache(module *wasm.Module) (cm *compiledMo
 		hit = false
 		return
 	} else if staleCache {
-		return nil, false, e.fileCache.Delete(fileCacheKey(module))
+		return nil, false, e.fileCache.Delete(fileCacheKey(module, e.boundsElision))
 	}
 	return
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
 	"github.com/tetratelabs/wazero/internal/engine/wazevo/wazevoapi"
-	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/internal/wasm"
 )
 
@@ -32,6 +31,7 @@ type Compiler struct {
 	refFuncSig             ssa.Signature
 	memmoveSig             ssa.Signature
 	ensureTermination      bool
+	boundsCheckElision     bool
 
 	// Followings are reset by per function.
 
@@ -106,10 +106,6 @@ type (
 
 var knownSafeBoundsAtTheEndOfBlockNil = wazevoapi.NewNilVarLength[knownSafeBoundWithID]()
 
-func unsafeSkipBoundsChecksEnabled() bool {
-	return version.UnsafeSkipBoundsChecksEnabled()
-}
-
 // NewFrontendCompiler returns a frontend Compiler.
 func NewFrontendCompiler(m *wasm.Module, ssaBuilder ssa.Builder, offset *wazevoapi.ModuleContextOffsetData, ensureTermination bool, listenerOn bool, sourceInfo bool) *Compiler {
 	c := &Compiler{
@@ -123,6 +119,14 @@ func NewFrontendCompiler(m *wasm.Module, ssaBuilder ssa.Builder, offset *wazevoa
 		varLengthKnownSafeBoundWithIDPool: wazevoapi.NewVarLengthPool[knownSafeBoundWithID](),
 	}
 	c.declareSignatures(listenerOn)
+	return c
+}
+
+// WithUnsafeBoundsCheckElision configures the compiler mode captured by its
+// owning engine. Enabling this is safe only when every linear memory uses the
+// engine-bound guarded allocator capability.
+func (c *Compiler) WithUnsafeBoundsCheckElision(enabled bool) *Compiler {
+	c.boundsCheckElision = enabled
 	return c
 }
 

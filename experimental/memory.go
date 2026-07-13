@@ -20,6 +20,34 @@ type MemoryAllocator interface {
 	Allocate(cap, max uint64) LinearMemory
 }
 
+const (
+	// UnsafeBoundsCheckElisionAddressSpace is the complete 32-bit WebAssembly
+	// address space an allocator must reserve before it can opt into bounds-check
+	// elision.
+	UnsafeBoundsCheckElisionAddressSpace = uint64(1) << 32
+	// UnsafeBoundsCheckElisionGuardSize is the inaccessible tail required after
+	// the 32-bit address space. It covers the largest constant offset accepted by
+	// the compiler fast path.
+	UnsafeBoundsCheckElisionGuardSize = uint64(1) << 16
+)
+
+// UnsafeBoundsCheckElisionAllocator is an explicitly unsafe opt-in capability
+// for compiler bounds-check elision. Implementations must reserve at least the
+// reported address space followed by an inaccessible guard region, keep the
+// base address stable, and leave every byte beyond committed WebAssembly memory
+// inaccessible. Incorrect implementations can allow arbitrary host-memory
+// access.
+//
+// wazero validates the reported sizes and binds generated code to the exact
+// allocator pointer used to create the runtime. It cannot verify that the
+// allocator's mappings actually honor this contract.
+type UnsafeBoundsCheckElisionAllocator interface {
+	MemoryAllocator
+	// UnsafeBoundsCheckElisionReservation reports the reserved WebAssembly
+	// address space and the inaccessible guard size in bytes.
+	UnsafeBoundsCheckElisionReservation() (addressSpace, guardSize uint64)
+}
+
 // MemoryAllocatorFunc is a convenience for defining inlining a MemoryAllocator.
 type MemoryAllocatorFunc func(cap, max uint64) LinearMemory
 

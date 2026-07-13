@@ -350,6 +350,15 @@ func (s *Store) instantiate(
 	m.Tables = make([]*TableInstance, int(module.ImportTableCount)+len(module.TableSection))
 	m.Globals = make([]*GlobalInstance, int(module.ImportGlobalCount)+len(module.GlobalSection))
 	m.Tags = make([]*TagInstance, int(module.ImportTagCount)+len(module.TagSection))
+	allocator, _ := ctx.Value(expctxkeys.MemoryAllocatorKey{}).(experimental.MemoryAllocator)
+	// Imported memories already belong to this store and were validated when
+	// their owning module allocated them. Only a locally declared memory uses
+	// the allocator from this instantiation context.
+	if module.MemorySection != nil {
+		if err = s.Engine.ValidateMemoryAllocator(allocator); err != nil {
+			return nil, err
+		}
+	}
 	m.Engine, err = s.Engine.NewModuleEngine(module, m)
 	if err != nil {
 		return nil, err
@@ -365,8 +374,6 @@ func (s *Store) instantiate(
 	if err != nil {
 		return nil, err
 	}
-
-	allocator, _ := ctx.Value(expctxkeys.MemoryAllocatorKey{}).(experimental.MemoryAllocator)
 
 	m.buildGlobals(module, m.Engine.FunctionInstanceReference)
 	m.buildTags(module)

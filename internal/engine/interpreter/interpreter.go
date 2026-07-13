@@ -67,6 +67,10 @@ func (e *engine) DeleteCompiledModule(m *wasm.Module) {
 	e.deleteCompiledFunctions(m)
 }
 
+// ValidateMemoryAllocator implements wasm.Engine. The interpreter always keeps
+// explicit bounds checks and therefore accepts any allocator.
+func (e *engine) ValidateMemoryAllocator(experimental.MemoryAllocator) error { return nil }
+
 func (e *engine) deleteCompiledFunctions(module *wasm.Module) {
 	e.mux.Lock()
 	defer e.mux.Unlock()
