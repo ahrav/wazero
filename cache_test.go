@@ -7,9 +7,13 @@ import (
 	"os"
 	"path"
 	goruntime "runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/platform"
+	"github.com/tetratelabs/wazero/internal/testing/binaryencoding"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 	"github.com/tetratelabs/wazero/internal/wasm"
 )
@@ -19,6 +23,33 @@ var facWasm []byte
 
 //go:embed testdata/mem_grow.wasm
 var memGrowWasm []byte
+
+type cacheGuardedAllocator struct{ identity byte }
+
+type cacheProbeAllocator struct{ probes atomic.Uint32 }
+
+func (*cacheGuardedAllocator) Allocate(_, max uint64) experimental.LinearMemory {
+	return &cacheGuardedMemory{buffer: make([]byte, max)}
+}
+
+func (*cacheGuardedAllocator) UnsafeBoundsCheckElisionReservation() (uint64, uint64) {
+	return experimental.UnsafeBoundsCheckElisionAddressSpace, experimental.UnsafeBoundsCheckElisionGuardSize
+}
+
+func (*cacheProbeAllocator) Allocate(_, max uint64) experimental.LinearMemory {
+	return &cacheGuardedMemory{buffer: make([]byte, max)}
+}
+
+func (a *cacheProbeAllocator) UnsafeBoundsCheckElisionReservation() (uint64, uint64) {
+	a.probes.Add(1)
+	return experimental.UnsafeBoundsCheckElisionAddressSpace, experimental.UnsafeBoundsCheckElisionGuardSize
+}
+
+type cacheGuardedMemory struct{ buffer []byte }
+
+func (m *cacheGuardedMemory) Reallocate(size uint64) []byte { return m.buffer[:size] }
+
+func (m *cacheGuardedMemory) Free() { m.buffer = nil }
 
 func TestCompilationCache(t *testing.T) {
 	ctx := context.Background()
@@ -202,6 +233,80 @@ func TestCache_ensuresFileCache(t *testing.T) {
 	})
 }
 
+func TestCache_boundsElisionAllocatorIdentity(t *testing.T) {
+	if !platform.CompilerSupported() {
+		t.Skip()
+	}
+	c := NewCompilationCache()
+	config := NewRuntimeConfigCompiler().WithCompilationCache(c)
+	checked := NewRuntimeWithConfig(context.Background(), config).(*runtime).store.Engine
+
+	allocator1, allocator2 := &cacheGuardedAllocator{}, &cacheGuardedAllocator{}
+	ctx1 := experimental.WithMemoryAllocator(context.Background(), allocator1)
+	ctx2 := experimental.WithMemoryAllocator(context.Background(), allocator2)
+	unsafe1 := NewRuntimeWithConfig(ctx1, config).(*runtime).store.Engine
+	unsafe1Again := NewRuntimeWithConfig(ctx1, config).(*runtime).store.Engine
+	unsafe2 := NewRuntimeWithConfig(ctx2, config).(*runtime).store.Engine
+
+	require.Equal(t, unsafe1, unsafe1Again)
+	require.NotEqual(t, checked, unsafe1)
+	require.NotEqual(t, unsafe1, unsafe2)
+
+	const goroutines = 32
+	engines := make(chan wasm.Engine, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			engines <- NewRuntimeWithConfig(ctx1, config).(*runtime).store.Engine
+		}()
+	}
+	wg.Wait()
+	close(engines)
+	for engine := range engines {
+		require.Equal(t, unsafe1, engine)
+	}
+	require.NoError(t, c.Close(context.Background()))
+}
+
+func TestCache_interpreterDoesNotProbeBoundsElisionCapability(t *testing.T) {
+	allocator := &cacheProbeAllocator{}
+	ctx := experimental.WithMemoryAllocator(context.Background(), allocator)
+	r := NewRuntimeWithConfig(ctx, NewRuntimeConfigInterpreter())
+	require.Equal(t, uint32(0), allocator.probes.Load())
+	require.NoError(t, r.Close(ctx))
+}
+
+func TestRuntime_boundsElisionAllocatorEnforcement(t *testing.T) {
+	if !platform.CompilerSupported() {
+		t.Skip()
+	}
+	allocator := &cacheGuardedAllocator{}
+	ctx := experimental.WithMemoryAllocator(context.Background(), allocator)
+	r := NewRuntimeWithConfig(ctx, NewRuntimeConfigCompiler())
+	defer r.Close(ctx) //nolint:errcheck
+
+	binary := binaryencoding.EncodeModule(&wasm.Module{
+		TypeSection:     []wasm.FunctionType{{Params: []wasm.ValueType{wasm.ValueTypeI32}, Results: []wasm.ValueType{wasm.ValueTypeI32}}},
+		FunctionSection: []wasm.Index{0},
+		CodeSection: []wasm.Code{{Body: []byte{
+			wasm.OpcodeLocalGet, 0, wasm.OpcodeI32Load, 2, 0, wasm.OpcodeEnd,
+		}}},
+		MemorySection: &wasm.Memory{Min: 1, Cap: 1, Max: 1, IsMaxEncoded: true},
+	})
+	compiled, err := r.CompileModule(context.Background(), binary)
+	require.NoError(t, err)
+	defer compiled.Close(ctx) //nolint:errcheck
+
+	_, err = r.InstantiateModule(context.Background(), compiled, NewModuleConfig().WithName("mismatch"))
+	require.EqualError(t, err, "memory allocator does not match the runtime bounds-check-elision allocator")
+
+	module, err := r.InstantiateModule(ctx, compiled, NewModuleConfig().WithName("matching"))
+	require.NoError(t, err)
+	require.NoError(t, module.Close(ctx))
+}
+
 // requireContainsDir ensures the directory was created in the correct path,
 // as file.Abs can return slightly different answers for a temp directory. For
 // example, /var/folders/... vs /private/var/folders/...
@@ -241,5 +346,12 @@ func TestCache_Close(t *testing.T) {
 		err := c.Close(testCtx)
 		require.NoError(t, err)
 		require.True(t, c.engs[engineKindCompiler].(*mockEngine).closed)
+	})
+	t.Run("unsafe compiler", func(t *testing.T) {
+		eng := &mockEngine{}
+		c := &cache{unsafeEngs: map[unsafeEngineKey]*cachedEngine{{}: {eng: eng}}}
+		err := c.Close(testCtx)
+		require.NoError(t, err)
+		require.True(t, eng.closed)
 	})
 }

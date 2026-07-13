@@ -32,6 +32,10 @@ type Engine interface {
 	// Note: Input parameters must be pre-validated with wasm.Module Validate, to ensure no fields are invalid
 	// due to reasons such as out-of-bounds.
 	NewModuleEngine(module *Module, instance *ModuleInstance) (ModuleEngine, error)
+
+	// ValidateMemoryAllocator checks that the allocator used to instantiate a
+	// memory is compatible with this engine's compiled code.
+	ValidateMemoryAllocator(allocator experimental.MemoryAllocator) error
 }
 
 // ModuleEngine implements function calls for a given module.

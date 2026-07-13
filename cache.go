@@ -12,6 +12,7 @@ import (
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/internal/filecache"
+	"github.com/tetratelabs/wazero/internal/memoryallocator"
 	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/internal/wasm"
 )
@@ -55,7 +56,7 @@ func NewCompilationCache() CompilationCache {
 // Note: The embedder must safeguard this directory from external changes.
 func NewCompilationCacheWithDir(dirname string) (CompilationCache, error) {
 	c := &cache{}
-	err := c.ensuresFileCache(dirname, version.GetCompilationCacheVersion())
+	err := c.ensuresFileCache(dirname, version.GetCompilationCacheVersion(false))
 	return c, err
 }
 
@@ -66,9 +67,40 @@ type cache struct {
 	engs      [engineKindCount]wasm.Engine
 	fileCache filecache.Cache
 	initOnces [engineKindCount]sync.Once
+
+	unsafeMux  sync.Mutex
+	unsafeEngs map[unsafeEngineKey]*cachedEngine
+}
+
+type unsafeEngineKey struct {
+	kind        engineKind
+	allocatorID memoryallocator.Identity
+}
+
+type cachedEngine struct {
+	once sync.Once
+	eng  wasm.Engine
 }
 
 func (c *cache) initEngine(ek engineKind, ne newEngine, ctx context.Context, features api.CoreFeatures) wasm.Engine {
+	if ek == engineKindCompiler {
+		memoryConfig := memoryallocator.FromContext(ctx)
+		if memoryConfig.BoundsCheckElision {
+			key := unsafeEngineKey{kind: ek, allocatorID: memoryConfig.Identity}
+			c.unsafeMux.Lock()
+			if c.unsafeEngs == nil {
+				c.unsafeEngs = map[unsafeEngineKey]*cachedEngine{}
+			}
+			cached := c.unsafeEngs[key]
+			if cached == nil {
+				cached = &cachedEngine{}
+				c.unsafeEngs[key] = cached
+			}
+			c.unsafeMux.Unlock()
+			cached.once.Do(func() { cached.eng = ne(ctx, features, c.fileCache) })
+			return cached.eng
+		}
+	}
 	c.initOnces[ek].Do(func() { c.engs[ek] = ne(ctx, features, c.fileCache) })
 	return c.engs[ek]
 }
@@ -78,6 +110,15 @@ func (c *cache) Close(_ context.Context) (err error) {
 	for _, eng := range c.engs {
 		if eng != nil {
 			if err = eng.Close(); err != nil {
+				return
+			}
+		}
+	}
+	c.unsafeMux.Lock()
+	defer c.unsafeMux.Unlock()
+	for _, cached := range c.unsafeEngs {
+		if cached.eng != nil {
+			if err = cached.eng.Close(); err != nil {
 				return
 			}
 		}

@@ -4290,7 +4290,7 @@ func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, o
 		// == false) skip its check, since its Go trampoline truncates the
 		// address and never touches the guard page. When the flag is off, no
 		// guard-only bounds exist, so reuse stays unconditional as before.
-		if ceil <= known.bound && (allowGuardPageElision || !unsafeSkipBoundsChecksEnabled()) {
+		if ceil <= known.bound && (allowGuardPageElision || !c.boundsCheckElision) {
 			if !address.Valid() {
 				// This means that, the bound is known to be safe, but the memory base might have changed.
 				// So, we re-calculate the address.
@@ -4320,7 +4320,7 @@ func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, o
 	// faulting. This is an unsafe, opt-in fast path — the paired allocator MUST
 	// honor the full reservation. Large constant offsets fall back to the
 	// explicit check.
-	if allowGuardPageElision && unsafeSkipBoundsChecksEnabled() && ceil <= 65536 {
+	if allowGuardPageElision && c.boundsCheckElision && ceil <= 65536 {
 		extBaseAddr := builder.AllocateInstruction().
 			AsUExtend(baseAddr, 32, 64).
 			Insert(builder).

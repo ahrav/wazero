@@ -805,6 +805,9 @@ func (e *mockEngine) DeleteCompiledModule(module *wasm.Module) {
 	delete(e.cachedModules, module)
 }
 
+// ValidateMemoryAllocator implements the same method as documented on wasm.Engine.
+func (e *mockEngine) ValidateMemoryAllocator(experimental.MemoryAllocator) error { return nil }
+
 // NewModuleEngine implements the same method as documented on wasm.Engine.
 func (e *mockEngine) NewModuleEngine(_ *wasm.Module, _ *wasm.ModuleInstance) (wasm.ModuleEngine, error) {
 	return nil, nil

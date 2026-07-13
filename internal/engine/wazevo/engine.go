@@ -19,6 +19,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
 	"github.com/tetratelabs/wazero/internal/engine/wazevo/wazevoapi"
 	"github.com/tetratelabs/wazero/internal/filecache"
+	"github.com/tetratelabs/wazero/internal/memoryallocator"
 	"github.com/tetratelabs/wazero/internal/platform"
 	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/internal/wasm"
@@ -31,8 +32,13 @@ type (
 	}
 	// engine implements wasm.Engine.
 	engine struct {
-		wazeroVersion   string
-		fileCache       filecache.Cache
+		wazeroVersion string
+		fileCache     filecache.Cache
+		boundsElision bool
+		// memoryAllocator keeps the engine-bound allocator alive for the entire
+		// lifetime of machine code authorized by allocatorID.
+		memoryAllocator experimental.MemoryAllocator
+		allocatorID     memoryallocator.Identity
 		compiledModules map[wasm.ModuleID]*compiledModuleWithCount
 		// sortedCompiledModules is a list of compiled modules sorted by the initial address of the executable.
 		sortedCompiledModules []*compiledModule
@@ -128,6 +134,13 @@ var _ wasm.Engine = (*engine)(nil)
 
 // NewEngine returns the implementation of wasm.Engine.
 func NewEngine(ctx context.Context, _ api.CoreFeatures, fc filecache.Cache) wasm.Engine {
+	memoryConfig := memoryallocator.FromContext(ctx)
+	var memoryAllocator experimental.MemoryAllocator
+	if memoryConfig.BoundsCheckElision {
+		// Keep the bound allocator alive so its identity cannot be reused while
+		// this unchecked engine still exists.
+		memoryAllocator = memoryConfig.Allocator
+	}
 	machine := newMachine()
 	be := backend.NewCompiler(ctx, machine, ssa.NewBuilder())
 	e := &engine{
@@ -136,7 +149,10 @@ func NewEngine(ctx context.Context, _ api.CoreFeatures, fc filecache.Cache) wasm
 		machine:         machine,
 		be:              be,
 		fileCache:       fc,
-		wazeroVersion:   version.GetCompilationCacheVersion(),
+		boundsElision:   memoryConfig.BoundsCheckElision,
+		memoryAllocator: memoryAllocator,
+		allocatorID:     memoryConfig.Identity,
+		wazeroVersion:   version.GetCompilationCacheVersion(memoryConfig.BoundsCheckElision),
 	}
 	e.compileSharedFunctions()
 	return e
@@ -263,7 +279,8 @@ func (e *engine) compileModule(ctx context.Context, module *wasm.Module, listene
 
 	if workers := experimental.GetCompilationWorkers(ctx); workers <= 1 {
 		// Compile with a single goroutine.
-		fe := frontend.NewFrontendCompiler(module, ssaBuilder, &cm.offsets, ensureTermination, withListener, needSourceInfo)
+		fe := frontend.NewFrontendCompiler(module, ssaBuilder, &cm.offsets, ensureTermination, withListener, needSourceInfo).
+			WithUnsafeBoundsCheckElision(e.boundsElision)
 
 		for i := range module.CodeSection {
 			if wazevoapi.DeterministicCompilationVerifierEnabled {
@@ -318,6 +335,7 @@ func (e *engine) compileModule(ctx context.Context, module *wasm.Module, listene
 				be := backend.NewCompiler(ctx, machine, ssaBuilder)
 				fe := frontend.NewFrontendCompiler(
 					module, ssaBuilder, &cm.offsets, ensureTermination, withListener, needSourceInfo).
+					WithUnsafeBoundsCheckElision(e.boundsElision).
 					WithTryTableMetadata(sharedTTM)
 
 				for {
@@ -750,6 +768,18 @@ func (e *engine) NewModuleEngine(m *wasm.Module, mi *wasm.ModuleInstance) (wasm.
 		}
 	}
 	return me, nil
+}
+
+// ValidateMemoryAllocator implements wasm.Engine.
+func (e *engine) ValidateMemoryAllocator(allocator experimental.MemoryAllocator) error {
+	if !e.boundsElision {
+		return nil
+	}
+	config := memoryallocator.FromAllocator(allocator)
+	if !config.BoundsCheckElision || config.Identity != e.allocatorID {
+		return errors.New("memory allocator does not match the runtime bounds-check-elision allocator")
+	}
+	return nil
 }
 
 func (e *engine) compileSharedFunctions() {

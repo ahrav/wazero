@@ -33,6 +33,7 @@ func TestCompiler_LowerToSSA(t *testing.T) {
 		name              string
 		ensureTermination bool
 		needListener      bool
+		boundsElision     bool
 		// m is the *wasm.Module to be compiled in this test.
 		m *wasm.Module
 		// targetIndex is the index of a local function to be compiled in this test.
@@ -1052,6 +1053,19 @@ blk0: (exec_ctx:i64, module_ctx:i64, v2:i32)
 	v9:i64 = Iadd v8, v4
 	v10:i32 = Load v9, 0x0
 	Jump blk_ret, v10
+`,
+		},
+		{
+			name:          "memory_load_basic / bounds-check elision",
+			m:             testcases.MemoryLoadBasic.Module,
+			boundsElision: true,
+			exp: `
+blk0: (exec_ctx:i64, module_ctx:i64, v2:i32)
+	v3:i64 = UExtend v2, 32->64
+	v4:i64 = Load module_ctx, 0x8
+	v5:i64 = Iadd v4, v3
+	v6:i32 = Load v5, 0x0
+	Jump blk_ret, v6
 `,
 		},
 		{
@@ -3678,7 +3692,8 @@ blk9: () <-- (blk4)
 			b := ssa.NewBuilder()
 
 			offset := wazevoapi.NewModuleContextOffsetData(tc.m, tc.needListener)
-			fc := NewFrontendCompiler(tc.m, b, &offset, tc.ensureTermination, tc.needListener, false)
+			fc := NewFrontendCompiler(tc.m, b, &offset, tc.ensureTermination, tc.needListener, false).
+				WithUnsafeBoundsCheckElision(tc.boundsElision)
 			typeIndex := tc.m.FunctionSection[tc.targetIndex]
 			code := &tc.m.CodeSection[tc.targetIndex]
 			fc.Init(tc.targetIndex, typeIndex, &tc.m.TypeSection[typeIndex], code.LocalTypes, code.Body, tc.needListener, 0)

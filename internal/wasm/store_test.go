@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tetratelabs/wazero/api"
@@ -93,6 +94,28 @@ func TestModuleInstance_Memory(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStore_Instantiate_memoryAllocatorValidation(t *testing.T) {
+	validationErr := errors.New("allocator mismatch")
+	engine := &mockEngine{callFailIndex: -1, validateAllocatorErr: validationErr}
+	store := NewStore(api.CoreFeaturesV1, engine)
+
+	_, err := store.Instantiate(testCtx, &Module{MemorySection: &Memory{}}, "memory", nil, nil)
+	require.EqualError(t, err, validationErr.Error())
+	require.Equal(t, uint32(1), engine.validateAllocatorCalls.Load())
+
+	engine.validateAllocatorErr = nil
+	_, err = store.Instantiate(testCtx, &Module{}, "no-memory", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), engine.validateAllocatorCalls.Load())
+
+	_, err = store.Instantiate(testCtx, &Module{
+		ImportSection:     []Import{{Module: "missing", Name: "memory", Type: ExternTypeMemory, DescMem: &Memory{}}},
+		ImportMemoryCount: 1,
+	}, "imported-memory", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), engine.validateAllocatorCalls.Load())
 }
 
 func TestStore_Instantiate(t *testing.T) {
@@ -404,8 +427,10 @@ func TestStore_Instantiate_Errors(t *testing.T) {
 }
 
 type mockEngine struct {
-	shouldCompileFail bool
-	callFailIndex     int
+	shouldCompileFail      bool
+	callFailIndex          int
+	validateAllocatorErr   error
+	validateAllocatorCalls atomic.Uint32
 }
 
 type mockModuleEngine struct {
@@ -456,6 +481,12 @@ func (e *mockEngine) CompiledModuleCount() uint32 { return 0 }
 
 // DeleteCompiledModule implements the same method as documented on wasm.Engine.
 func (e *mockEngine) DeleteCompiledModule(*Module) {}
+
+// ValidateMemoryAllocator implements the same method as documented on wasm.Engine.
+func (e *mockEngine) ValidateMemoryAllocator(experimental.MemoryAllocator) error {
+	e.validateAllocatorCalls.Add(1)
+	return e.validateAllocatorErr
+}
 
 // NewModuleEngine implements the same method as documented on wasm.Engine.
 func (e *mockEngine) NewModuleEngine(_ *Module, _ *ModuleInstance) (ModuleEngine, error) {
