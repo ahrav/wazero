@@ -4,6 +4,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 )
 
 // Default is the default version value used when none was found.
@@ -12,12 +13,12 @@ const Default = "dev"
 // version holds the current version from the go.mod of downstream users or set by ldflag for wazero CLI.
 var version string
 
-// boundsCacheSalt isolates compilation caches produced with
+// The bounds-check cache salt isolates compilation caches produced with
 // WAZERO_UNSAFE_SKIP_BOUNDS=1 (explicit bounds checks elided) from those
 // produced without it, so unchecked machine code is never loaded by a checked
-// build (or vice versa). It is captured once at process start — the same point
-// the frontend captures the flag — so the two cannot diverge if the
-// environment changes between engine creation and module compilation.
+// build (or vice versa). The mode is captured on first use so an embedding
+// library can configure it before creating an engine, while the frontend and
+// cache key still cannot diverge if the environment changes later.
 //
 // It is deliberately applied only in GetCompilationCacheVersion (the cache
 // key), NOT in GetWazeroVersion, so that the CLI's exact `== Default`
@@ -25,22 +26,32 @@ var version string
 // it at the cache boundary also isolates every build type uniformly — release,
 // dev/replace, and `-ldflags -X ...version.version=...` — without special
 // casing any GetWazeroVersion return path.
-var boundsCacheSalt = func() string {
-	if os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1" {
-		return "-nb"
-	}
-	return ""
-}()
+var (
+	unsafeSkipBoundsOnce sync.Once
+	unsafeSkipBounds     bool
+)
+
+// UnsafeSkipBoundsChecksEnabled returns the process-wide compiler mode. The
+// first caller snapshots the environment for both lowering and cache keys.
+func UnsafeSkipBoundsChecksEnabled() bool {
+	unsafeSkipBoundsOnce.Do(func() {
+		unsafeSkipBounds = os.Getenv("WAZERO_UNSAFE_SKIP_BOUNDS") == "1"
+	})
+	return unsafeSkipBounds
+}
 
 // GetCompilationCacheVersion returns the version string used to key the wazevo
 // compilation cache (both the on-disk cache directory and the serialized cache
-// header). It augments GetWazeroVersion with boundsCacheSalt so that machine
+// header). It augments GetWazeroVersion with the bounds-check mode so machine
 // code compiled with WAZERO_UNSAFE_SKIP_BOUNDS=1 is never loaded from — or
 // written to — a cache belonging to a build without it, and vice versa. Keep
 // this and GetWazeroVersion in sync at every cache site so the directory key
 // and the header check never disagree.
 func GetCompilationCacheVersion() string {
-	return GetWazeroVersion() + boundsCacheSalt
+	if UnsafeSkipBoundsChecksEnabled() {
+		return GetWazeroVersion() + "-nb"
+	}
+	return GetWazeroVersion()
 }
 
 // GetWazeroVersion returns the current version of wazero either in the go.mod or set by ldflag for wazero CLI.
