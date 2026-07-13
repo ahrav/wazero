@@ -56,7 +56,7 @@ func GetWazeroVersion() (ret string) {
 	// Cache for the subsequent calls.
 	// Salt the version so compilation caches from the unpatched runtime are
 	// never shared with this fork (SSA differs for shared-memory modules).
-	ret += "-re2fixedmem1"
+	ret += "-re2fixedmem2"
 	version = ret
 	return ret
 }
