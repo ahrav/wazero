@@ -40,18 +40,25 @@ func UnsafeSkipBoundsChecksEnabled() bool {
 	return unsafeSkipBounds
 }
 
+// forkCacheSalt isolates compilation caches produced by this fork from those
+// of unpatched wazero: the shared-memory length-caching change (plain loads +
+// block-local caching) alters the SSA — and therefore the machine code — for
+// every module that uses shared memory, so caches must never be exchanged
+// with builds that lower shared-memory accesses differently.
+const forkCacheSalt = "-re2fixedmem1"
+
 // GetCompilationCacheVersion returns the version string used to key the wazevo
 // compilation cache (both the on-disk cache directory and the serialized cache
-// header). It augments GetWazeroVersion with the bounds-check mode so machine
-// code compiled with WAZERO_UNSAFE_SKIP_BOUNDS=1 is never loaded from — or
-// written to — a cache belonging to a build without it, and vice versa. Keep
-// this and GetWazeroVersion in sync at every cache site so the directory key
-// and the header check never disagree.
+// header). It augments GetWazeroVersion with forkCacheSalt (always) and the
+// bounds-check mode (when WAZERO_UNSAFE_SKIP_BOUNDS=1) so machine code from a
+// differently-lowered build is never loaded from — or written to — this
+// build's cache, and vice versa. Keep this and GetWazeroVersion in sync at
+// every cache site so the directory key and the header check never disagree.
 func GetCompilationCacheVersion() string {
 	if UnsafeSkipBoundsChecksEnabled() {
-		return GetWazeroVersion() + "-nb"
+		return GetWazeroVersion() + forkCacheSalt + "-nb"
 	}
-	return GetWazeroVersion()
+	return GetWazeroVersion() + forkCacheSalt
 }
 
 // GetWazeroVersion returns the current version of wazero either in the go.mod or set by ldflag for wazero CLI.
@@ -86,9 +93,6 @@ func GetWazeroVersion() (ret string) {
 	}
 
 	// Cache for the subsequent calls.
-	// Salt the version so compilation caches from the unpatched runtime are
-	// never shared with this fork (SSA differs for shared-memory modules).
-	ret += "-re2fixedmem1"
 	version = ret
 	return ret
 }
