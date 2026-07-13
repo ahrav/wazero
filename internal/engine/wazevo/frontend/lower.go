@@ -3158,7 +3158,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 			timeout := state.pop()
 			exp := state.pop()
 			baseAddr := state.pop()
-			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), opSize)
+			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), opSize, false)
 
 			memoryWaitPtr := builder.AllocateInstruction().
 				AsLoad(c.execCtxPtrValue,
@@ -3180,7 +3180,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 			c.storeCallerModuleContext()
 			count := state.pop()
 			baseAddr := state.pop()
-			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), 4)
+			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), 4, false)
 
 			memoryNotifyPtr := builder.AllocateInstruction().
 				AsLoad(c.execCtxPtrValue,
@@ -3220,7 +3220,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 				typ = ssa.TypeI32
 			}
 
-			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size)
+			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size, true)
 			res := builder.AllocateInstruction().AsAtomicLoad(addr, size, typ).Insert(builder).Return()
 			state.push(res)
 		case wasm.OpcodeAtomicI32Store, wasm.OpcodeAtomicI64Store, wasm.OpcodeAtomicI32Store8, wasm.OpcodeAtomicI32Store16, wasm.OpcodeAtomicI64Store8, wasm.OpcodeAtomicI64Store16, wasm.OpcodeAtomicI64Store32:
@@ -3244,7 +3244,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 				size = 1
 			}
 
-			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size)
+			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size, true)
 			builder.AllocateInstruction().AsAtomicStore(addr, val, size).Insert(builder)
 		case wasm.OpcodeAtomicI32RmwAdd, wasm.OpcodeAtomicI64RmwAdd, wasm.OpcodeAtomicI32Rmw8AddU, wasm.OpcodeAtomicI32Rmw16AddU, wasm.OpcodeAtomicI64Rmw8AddU, wasm.OpcodeAtomicI64Rmw16AddU, wasm.OpcodeAtomicI64Rmw32AddU,
 			wasm.OpcodeAtomicI32RmwSub, wasm.OpcodeAtomicI64RmwSub, wasm.OpcodeAtomicI32Rmw8SubU, wasm.OpcodeAtomicI32Rmw16SubU, wasm.OpcodeAtomicI64Rmw8SubU, wasm.OpcodeAtomicI64Rmw16SubU, wasm.OpcodeAtomicI64Rmw32SubU,
@@ -3337,7 +3337,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 				}
 			}
 
-			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size)
+			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size, true)
 			res := builder.AllocateInstruction().AsAtomicRmw(rmwOp, addr, val, size).Insert(builder).Return()
 			state.push(res)
 		case wasm.OpcodeAtomicI32RmwCmpxchg, wasm.OpcodeAtomicI64RmwCmpxchg, wasm.OpcodeAtomicI32Rmw8CmpxchgU, wasm.OpcodeAtomicI32Rmw16CmpxchgU, wasm.OpcodeAtomicI64Rmw8CmpxchgU, wasm.OpcodeAtomicI64Rmw16CmpxchgU, wasm.OpcodeAtomicI64Rmw32CmpxchgU:
@@ -3361,7 +3361,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 			case wasm.OpcodeAtomicI32Rmw8CmpxchgU, wasm.OpcodeAtomicI64Rmw8CmpxchgU:
 				size = 1
 			}
-			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size)
+			addr := c.atomicMemOpSetup(baseAddr, uint64(offset), size, true)
 			res := builder.AllocateInstruction().AsAtomicCas(addr, exp, repl, size).Insert(builder).Return()
 			state.push(res)
 		case wasm.OpcodeAtomicFence:
@@ -4266,12 +4266,13 @@ func (c *Compiler) memOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBy
 }
 
 // memOpSetupWithGuardElision is memOpSetup with explicit control over the
-// guard-page bounds-check elision. atomicMemOpSetup passes false because
-// memory.atomic.wait*/notify hand the computed absolute address to a Go
-// trampoline that truncates it back to a uint32 offset (uint32(addr-base))
-// instead of performing a native access: an out-of-bounds 32-bit address never
-// reaches the guard region and would instead wrap to a valid in-bounds offset,
-// so those ops must keep the explicit bounds check.
+// guard-page bounds-check elision. Atomic load/store/rmw/cas pass true (native
+// processor accesses fault on the guard page); memory.atomic.wait*/notify pass
+// false because they hand the computed absolute address to a Go trampoline that
+// truncates it back to a uint32 offset (uint32(addr-base)) instead of
+// performing a native access: an out-of-bounds 32-bit address never reaches
+// the guard region and would instead wrap to a valid in-bounds offset, so those
+// ops must keep the explicit bounds check.
 func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, operationSizeInBytes uint64, allowGuardPageElision bool) (address ssa.Value) {
 	address = ssa.ValueInvalid
 	builder := c.ssaBuilder
@@ -4367,14 +4368,27 @@ func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, o
 
 // atomicMemOpSetup inserts the bounds check and calculates the address of the memory operation (loads/stores), including
 // the constant offset and performs an alignment check on the final address.
-func (c *Compiler) atomicMemOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBytes uint64) (address ssa.Value) {
+//
+// allowGuardPageElision controls whether the explicit bounds check may be
+// elided when the guard-page allocator is active:
+//   - true for atomic load/store/rmw/cas: these lower to native processor
+//     instructions (x86 MOV/XCHG/LOCK XADD/LOCK CMPXCHG; arm64 LDAR/STLR/
+//     LSE atomics) that access the computed memBase+addr pointer directly.
+//     An out-of-bounds 32-bit address lands in the 4 GiB + 64 KiB PROT_NONE
+//     reservation and faults, same soundness argument as plain loads/stores.
+//     LOCK-prefixed (x86) and exclusive (arm64) instructions also fault on
+//     protection violations.
+//   - false for memory.atomic.wait32/wait64/notify: these exit to Go
+//     trampolines that truncate the computed absolute address back to a
+//     uint32 offset (uint32(addr-base)); an OOB address would wrap into
+//     bounds rather than fault, so the explicit check must remain.
+//
+// The wasm-spec-required alignment check is always emitted regardless of
+// allowGuardPageElision — it is orthogonal to bounds checking.
+func (c *Compiler) atomicMemOpSetup(baseAddr ssa.Value, constOffset, operationSizeInBytes uint64, allowGuardPageElision bool) (address ssa.Value) {
 	builder := c.ssaBuilder
 
-	// Atomic ops opt out of guard-page elision: memory.atomic.wait*/notify pass
-	// the address through a Go trampoline that truncates it to a uint32 offset,
-	// so an out-of-bounds address would wrap instead of faulting in the guard
-	// region. Keep the explicit bounds check for the whole atomic path.
-	addrWithoutOffset := c.memOpSetupWithGuardElision(baseAddr, constOffset, operationSizeInBytes, false)
+	addrWithoutOffset := c.memOpSetupWithGuardElision(baseAddr, constOffset, operationSizeInBytes, allowGuardPageElision)
 	var addr ssa.Value
 	if constOffset == 0 {
 		addr = addrWithoutOffset
