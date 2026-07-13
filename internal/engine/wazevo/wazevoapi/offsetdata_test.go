@@ -161,6 +161,9 @@ func TestNewModuleContextOffsetData(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := NewModuleContextOffsetData(tc.m, tc.withListener)
 			require.Equal(t, tc.exp, got)
+			if got.LocalMemoryBegin >= 0 {
+				require.Equal(t, uint64(0), got.LocalMemoryLen().U64()%8)
+			}
 		})
 	}
 }

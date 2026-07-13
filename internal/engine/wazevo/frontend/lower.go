@@ -4351,12 +4351,7 @@ func (c *Compiler) memOpSetupWithGuardElision(baseAddr ssa.Value, constOffset, o
 	builder.InsertInstruction(baseAddrPlusCeil)
 
 	// Check for out of bounds memory access: `memLen >= baseAddrPlusCeil`.
-	cmp := builder.AllocateInstruction()
-	cmp.AsIcmp(memLen, baseAddrPlusCeil.Return(), ssa.IntegerCmpCondUnsignedLessThan)
-	builder.InsertInstruction(cmp)
-	exitIfNZ := builder.AllocateInstruction()
-	exitIfNZ.AsExitIfTrueWithCode(c.execCtxPtrValue, cmp.Return(), wazevoapi.ExitCodeMemoryOutOfBounds)
-	builder.InsertInstruction(exitIfNZ)
+	c.exitIfMemoryOutOfBounds(memLen, baseAddrPlusCeil.Return())
 
 	// Load the value from memBase + extBaseAddr.
 	if address == ssa.ValueInvalid { // Reuse the value if the memBase is already calculated at this point.
@@ -4580,6 +4575,70 @@ func (c *Compiler) getMemoryLenValue(forceReload bool) ssa.Value {
 
 	builder.DefineVariableInCurrentBB(variable, ret)
 	return ret
+}
+
+// loadSharedMemoryLenAtomically reloads the authoritative shared-memory length.
+// Local memories publish this in the module context, while imported memories use
+// the atomically updated length in the MemoryInstance.Buffer slice header.
+func (c *Compiler) loadSharedMemoryLenAtomically() ssa.Value {
+	builder := c.ssaBuilder
+	var base ssa.Value
+	var offset uint64
+	if c.offset.LocalMemoryBegin < 0 {
+		base = builder.AllocateInstruction().
+			AsLoad(c.moduleCtxPtrValue, c.offset.ImportedMemoryBegin.U32(), ssa.TypeI64).
+			Insert(builder).Return()
+		offset = memoryInstanceBufSizeOffset
+	} else {
+		base = c.moduleCtxPtrValue
+		offset = c.offset.LocalMemoryLen().U64()
+	}
+	offsetValue := builder.AllocateInstruction().AsIconst64(offset).Insert(builder).Return()
+	address := builder.AllocateInstruction().AsIadd(base, offsetValue).Insert(builder).Return()
+	return builder.AllocateInstruction().AsAtomicLoad(address, 8, ssa.TypeI64).Insert(builder).Return()
+}
+
+// exitIfMemoryOutOfBounds traps when ceil exceeds the current memory length.
+// Shared memories only grow, so a cached length can be stale-small but never
+// stale-large. On the apparent-OOB path, reload the published length before
+// deciding to trap; the common in-bounds path remains a plain cached load.
+func (c *Compiler) exitIfMemoryOutOfBounds(memLen, ceil ssa.Value) {
+	builder := c.ssaBuilder
+	cmp := builder.AllocateInstruction().
+		AsIcmp(memLen, ceil, ssa.IntegerCmpCondUnsignedLessThan).
+		Insert(builder).Return()
+	if !c.memoryShared {
+		builder.AllocateInstruction().
+			AsExitIfTrueWithCode(c.execCtxPtrValue, cmp, wazevoapi.ExitCodeMemoryOutOfBounds).
+			Insert(builder)
+		return
+	}
+
+	memoryBase := builder.FindValueInLinearPath(c.memoryBaseVariable)
+	reload, following := builder.AllocateBasicBlock(), builder.AllocateBasicBlock()
+	followingLen := following.AddParam(builder, ssa.TypeI64)
+	builder.AllocateInstruction().AsBrnz(cmp, ssa.ValuesNil, reload).Insert(builder)
+	c.insertJumpToBlock(c.allocateVarLengthValues(1, memLen), following)
+
+	builder.SetCurrentBlock(reload)
+	builder.Seal(reload)
+	freshLen := c.loadSharedMemoryLenAtomically()
+	stillOOB := builder.AllocateInstruction().
+		AsIcmp(freshLen, ceil, ssa.IntegerCmpCondUnsignedLessThan).
+		Insert(builder).Return()
+	builder.AllocateInstruction().
+		AsExitIfTrueWithCode(c.execCtxPtrValue, stillOOB, wazevoapi.ExitCodeMemoryOutOfBounds).
+		Insert(builder)
+	c.insertJumpToBlock(c.allocateVarLengthValues(1, freshLen), following)
+
+	builder.SetCurrentBlock(following)
+	builder.Seal(following)
+	builder.DefineVariableInCurrentBB(c.memoryLenVariable, followingLen)
+	if memoryBase.Valid() {
+		// Shared memories cannot move during growth, so the cached base remains
+		// valid on both paths through the length refresh.
+		builder.DefineVariableInCurrentBB(c.memoryBaseVariable, memoryBase)
+	}
 }
 
 func (c *Compiler) insertIcmp(cond ssa.IntegerCmpCond) {
@@ -5188,11 +5247,5 @@ func (c *Compiler) loadTableBaseAddr(tableInstancePtr ssa.Value) ssa.Value {
 func (c *Compiler) boundsCheckInMemory(memLen, offset, size ssa.Value) {
 	builder := c.ssaBuilder
 	ceil := builder.AllocateInstruction().AsIadd(offset, size).Insert(builder).Return()
-	cmp := builder.AllocateInstruction().
-		AsIcmp(memLen, ceil, ssa.IntegerCmpCondUnsignedLessThan).
-		Insert(builder).
-		Return()
-	builder.AllocateInstruction().
-		AsExitIfTrueWithCode(c.execCtxPtrValue, cmp, wazevoapi.ExitCodeMemoryOutOfBounds).
-		Insert(builder)
+	c.exitIfMemoryOutOfBounds(memLen, ceil)
 }

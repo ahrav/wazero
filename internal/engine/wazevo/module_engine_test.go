@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 
@@ -403,4 +404,45 @@ func Test_newAlignedOpaque(t *testing.T) {
 		require.Equal(t, s, len(buf))
 		require.Equal(t, 0, int(uintptr(unsafe.Pointer(&buf[0]))&15))
 	}
+}
+
+func TestModuleEngine_putLocalMemorySharedPublication(t *testing.T) {
+	const finalLength = 100_000
+	mem := &wasm.MemoryInstance{Buffer: make([]byte, 1, finalLength), Shared: true}
+	m := &moduleEngine{
+		parent: &compiledModule{offsets: wazevoapi.ModuleContextOffsetData{LocalMemoryBegin: 8}},
+		module: &wasm.ModuleInstance{MemoryInstance: mem},
+		opaque: newAlignedOpaque(32),
+	}
+	m.putLocalMemory()
+
+	length := (*uint64)(unsafe.Pointer(&m.opaque[16]))
+	started, result := make(chan struct{}), make(chan bool, 1)
+	go func() {
+		close(started)
+		last := uint64(1)
+		for {
+			current := atomic.LoadUint64(length)
+			if current < last {
+				result <- false
+				return
+			}
+			if current == finalLength {
+				result <- true
+				return
+			}
+			last = current
+			runtime.Gosched()
+		}
+	}()
+	<-started
+
+	for i := 2; i <= finalLength; i++ {
+		mem.Buffer = mem.Buffer[:i]
+		m.putLocalMemory()
+		if i%100 == 0 {
+			runtime.Gosched()
+		}
+	}
+	require.True(t, <-result)
 }

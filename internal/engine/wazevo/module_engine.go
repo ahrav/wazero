@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/tetratelabs/wazero/api"
@@ -265,7 +266,14 @@ func (m *moduleEngine) putLocalMemory() {
 		b = uint64(uintptr(unsafe.Pointer(&mem.Buffer[0])))
 	}
 	binary.LittleEndian.PutUint64(m.opaque[offset:], b)
-	binary.LittleEndian.PutUint64(m.opaque[offset+8:], s)
+	if mem.Shared {
+		// Publish the new length after Grow has made the corresponding memory
+		// visible. Compiled code uses an atomic reload only when its cached
+		// length would otherwise produce an out-of-bounds trap.
+		atomic.StoreUint64((*uint64)(unsafe.Pointer(&m.opaque[offset+8])), s)
+	} else {
+		binary.LittleEndian.PutUint64(m.opaque[offset+8:], s)
+	}
 }
 
 // ResolveImportedFunction implements wasm.ModuleEngine.

@@ -2077,15 +2077,26 @@ L0 (SSA Block: blk0):
 	orr x27, xzr, #0x10
 	sub sp, sp, x27
 	stp x30, x27, [sp, #-0x10]!
-	str xzr, [sp, #-0x10]!
-	ldr x8, [sp, #0x20]
+	str x19, [sp, #-0x10]!
+	str x20, [sp, #-0x10]!
+	sub sp, sp, #0x10
+	orr x27, xzr, #0x30
+	str x27, [sp, #-0x10]!
+	ldr x8, [sp, #0x50]
 	mov x9, xzr
 	uxtw x9, w9
 	ldr x10, [x1, #0x10]
 	add x11, x9, #0x1
 	subs xzr, x10, x11
+	b.lo #0x8, (L1)
+L15 (SSA Block: blk15):
+	b #0x48 (L2)
+L1 (SSA Block: blk1):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x11
 	mov x11, x0
-	b.hs #0x34, (L13)
+	b.hs #0x34, (L23)
 	movz x12, #0x4, lsl 0
 	str w12, [x11]
 	mov x12, sp
@@ -2093,7 +2104,8 @@ L0 (SSA Block: blk0):
 	adr x12, #0x0
 	str x12, [x11, #0x30]
 	exit_sequence x11
-L13:
+L23:
+L2 (SSA Block: blk2):
 	ldr x11, [x1, #0x8]
 	add x9, x11, x9
 	ldaddalb w2, w9, x9
@@ -2101,8 +2113,15 @@ L13:
 	uxtw x12, w12
 	add x13, x12, #0x2
 	subs xzr, x10, x13
+	b.lo #0x8, (L3)
+L16 (SSA Block: blk16):
+	b #0x48 (L4)
+L3 (SSA Block: blk3):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x13
 	mov x13, x0
-	b.hs #0x34, (L12)
+	b.hs #0x34, (L24)
 	movz x14, #0x4, lsl 0
 	str w14, [x13]
 	mov x14, sp
@@ -2110,11 +2129,12 @@ L13:
 	adr x14, #0x0
 	str x14, [x13, #0x30]
 	exit_sequence x13
-L12:
+L24:
+L4 (SSA Block: blk4):
 	add x12, x11, x12
 	ands xzr, x12, #0x1
 	mov x13, x0
-	b.eq #0x34, (L11)
+	b.eq #0x34, (L25)
 	movz x14, #0x17, lsl 0
 	str w14, [x13]
 	mov x14, sp
@@ -2122,122 +2142,163 @@ L12:
 	adr x14, #0x0
 	str x14, [x13, #0x30]
 	exit_sequence x13
-L11:
-	ldaddalh w3, w1, x12
-	orr w12, wzr, #0x10
-	uxtw x12, w12
-	add x13, x12, #0x4
-	subs xzr, x10, x13
-	mov x13, x0
-	b.hs #0x34, (L10)
-	movz x14, #0x4, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L10:
-	add x12, x11, x12
-	ands xzr, x12, #0x3
-	mov x13, x0
-	b.eq #0x34, (L9)
-	movz x14, #0x17, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L9:
-	ldaddal w4, w2, x12
-	orr w12, wzr, #0x18
-	uxtw x12, w12
-	add x13, x12, #0x1
-	subs xzr, x10, x13
-	mov x13, x0
-	b.hs #0x34, (L8)
-	movz x14, #0x4, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L8:
-	add x12, x11, x12
-	ldaddalb w5, w3, x12
-	orr w12, wzr, #0x20
-	uxtw x12, w12
-	add x13, x12, #0x2
-	subs xzr, x10, x13
-	mov x13, x0
-	b.hs #0x34, (L7)
-	movz x14, #0x4, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L7:
-	add x12, x11, x12
-	ands xzr, x12, #0x1
-	mov x13, x0
-	b.eq #0x34, (L6)
-	movz x14, #0x17, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L6:
-	ldaddalh w6, w4, x12
-	movz w12, #0x28, lsl 0
-	uxtw x12, w12
-	add x13, x12, #0x4
-	subs xzr, x10, x13
-	mov x13, x0
-	b.hs #0x34, (L5)
-	movz x14, #0x4, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L5:
-	add x12, x11, x12
-	ands xzr, x12, #0x3
-	mov x13, x0
-	b.eq #0x34, (L4)
-	movz x14, #0x17, lsl 0
-	str w14, [x13]
-	mov x14, sp
-	str x14, [x13, #0x38]
-	adr x14, #0x0
-	str x14, [x13, #0x30]
-	exit_sequence x13
-L4:
-	ldaddal w7, w5, x12
-	orr w12, wzr, #0x30
-	uxtw x12, w12
-	add x13, x12, #0x8
-	subs xzr, x10, x13
-	mov x10, x0
-	b.hs #0x34, (L3)
-	movz x13, #0x4, lsl 0
-	str w13, [x10]
-	mov x13, sp
-	str x13, [x10, #0x38]
-	adr x13, #0x0
-	str x13, [x10, #0x30]
-	exit_sequence x10
-L3:
-	add x10, x11, x12
+L25:
+	ldaddalh w3, w12, x12
+	orr w13, wzr, #0x10
+	uxtw x13, w13
+	add x14, x13, #0x4
+	subs xzr, x10, x14
+	b.lo #0x8, (L5)
+L17 (SSA Block: blk17):
+	b #0x48 (L6)
+L5 (SSA Block: blk5):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x14
+	mov x14, x0
+	b.hs #0x34, (L26)
+	movz x15, #0x4, lsl 0
+	str w15, [x14]
+	mov x15, sp
+	str x15, [x14, #0x38]
+	adr x15, #0x0
+	str x15, [x14, #0x30]
+	exit_sequence x14
+L26:
+L6 (SSA Block: blk6):
+	add x13, x11, x13
+	ands xzr, x13, #0x3
+	mov x14, x0
+	b.eq #0x34, (L27)
+	movz x15, #0x17, lsl 0
+	str w15, [x14]
+	mov x15, sp
+	str x15, [x14, #0x38]
+	adr x15, #0x0
+	str x15, [x14, #0x30]
+	exit_sequence x14
+L27:
+	ldaddal w4, w13, x13
+	orr w14, wzr, #0x18
+	uxtw x14, w14
+	add x15, x14, #0x1
+	subs xzr, x10, x15
+	b.lo #0x8, (L7)
+L18 (SSA Block: blk18):
+	b #0x48 (L8)
+L7 (SSA Block: blk7):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x15
+	mov x15, x0
+	b.hs #0x34, (L28)
+	movz x16, #0x4, lsl 0
+	str w16, [x15]
+	mov x16, sp
+	str x16, [x15, #0x38]
+	adr x16, #0x0
+	str x16, [x15, #0x30]
+	exit_sequence x15
+L28:
+L8 (SSA Block: blk8):
+	add x14, x11, x14
+	ldaddalb w5, w14, x14
+	orr w15, wzr, #0x20
+	uxtw x15, w15
+	add x16, x15, #0x2
+	subs xzr, x10, x16
+	b.lo #0x8, (L9)
+L19 (SSA Block: blk19):
+	b #0x48 (L10)
+L9 (SSA Block: blk9):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x16
+	mov x16, x0
+	b.hs #0x34, (L29)
+	movz x17, #0x4, lsl 0
+	str w17, [x16]
+	mov x17, sp
+	str x17, [x16, #0x38]
+	adr x17, #0x0
+	str x17, [x16, #0x30]
+	exit_sequence x16
+L29:
+L10 (SSA Block: blk10):
+	add x15, x11, x15
+	ands xzr, x15, #0x1
+	mov x16, x0
+	b.eq #0x34, (L30)
+	movz x17, #0x17, lsl 0
+	str w17, [x16]
+	mov x17, sp
+	str x17, [x16, #0x38]
+	adr x17, #0x0
+	str x17, [x16, #0x30]
+	exit_sequence x16
+L30:
+	ldaddalh w6, w15, x15
+	movz w16, #0x28, lsl 0
+	uxtw x16, w16
+	add x17, x16, #0x4
+	subs xzr, x10, x17
+	b.lo #0x8, (L11)
+L20 (SSA Block: blk20):
+	b #0x48 (L12)
+L11 (SSA Block: blk11):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x17
+	mov x17, x0
+	b.hs #0x34, (L31)
+	movz x19, #0x4, lsl 0
+	str w19, [x17]
+	mov x19, sp
+	str x19, [x17, #0x38]
+	adr x19, #0x0
+	str x19, [x17, #0x30]
+	exit_sequence x17
+L31:
+L12 (SSA Block: blk12):
+	add x16, x11, x16
+	ands xzr, x16, #0x3
+	mov x17, x0
+	b.eq #0x34, (L32)
+	movz x19, #0x17, lsl 0
+	str w19, [x17]
+	mov x19, sp
+	str x19, [x17, #0x38]
+	adr x19, #0x0
+	str x19, [x17, #0x30]
+	exit_sequence x17
+L32:
+	ldaddal w7, w16, x16
+	orr w17, wzr, #0x30
+	uxtw x17, w17
+	add x19, x17, #0x8
+	subs xzr, x10, x19
+	b.lo #0x8, (L13)
+L21 (SSA Block: blk21):
+	b #0x4c (L14)
+L13 (SSA Block: blk13):
+	add x10, x1, #0x10
+	ldar x10, x10
+	subs xzr, x10, x19
+	mov x19, x0
+	b.hs #0x34, (L33)
+	movz x20, #0x4, lsl 0
+	str w20, [x19]
+	mov x20, sp
+	str x20, [x19, #0x38]
+	adr x20, #0x0
+	str x20, [x19, #0x30]
+	exit_sequence x19
+L33:
+	str x10, [sp, #0x10]
+L14 (SSA Block: blk14):
+	add x10, x11, x17
 	ands xzr, x10, #0x7
-	b.eq #0x34, (L2)
+	b.eq #0x34, (L34)
 	movz x11, #0x17, lsl 0
 	str w11, [x0]
 	mov x11, sp
@@ -2245,10 +2306,18 @@ L3:
 	adr x11, #0x0
 	str x11, [x0, #0x30]
 	exit_sequence x0
-L2:
+L34:
 	ldaddal x8, x6, x10
+	mov x5, x16
+	mov x4, x15
+	mov x3, x14
+	mov x2, x13
+	mov x1, x12
 	mov x0, x9
 	add sp, sp, #0x10
+	add sp, sp, #0x10
+	ldr x20, [sp], #0x10
+	ldr x19, [sp], #0x10
 	ldr x30, [sp], #0x10
 	add sp, sp, #0x10
 	ret
